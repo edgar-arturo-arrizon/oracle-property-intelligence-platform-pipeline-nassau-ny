@@ -27,7 +27,7 @@ parcel:
   discrepancy_pct_vs_roll_section_1: 0.79
   discrepancy_explanation: "Full county roll includes roll sections 5 (special franchise), 6 (utility) and 8 (wholly exempt) with 15564 rows that mostly have no tax-lot polygon; against taxable roll section 1 (410896) the GIS gap is 0.79 percent. Condo units are present in GIS with t_condo_building / t_condo_unit_number but may share a footprint."
   separately_assessed_without_geometry: acknowledged
-  seed_decision: "Proposed: seed from the 2025 county roll (426460 print keys); join GIS polygons and NYS centroid points by SBL; keep rows without geometry. Requires operator approval because the full-roll gap exceeds 2 percent."
+  seed_decision: "APPROVED 2026-10-25 by operator: seed from the 2025 county roll (426460 rows); join GIS polygons and NYS centroid points by normalized SBL; keep rows without geometry (roll sections 5/6/8 and unmatched units) with null geometry."
   identifier_proven: true
   identifier_name: "Section-Block-Lot (SBL); NYS print_key_code; county PARID / PARCELKEY"
   identifier_format: "print_key S.-B-L (e.g. 32.-11-211); PARID SSBBB  LLLLX (e.g. '32011  02110'); PARCELKEY 'SS BBB LLLLX' (e.g. '32 011 02110')"
@@ -49,7 +49,7 @@ permits:
       anonymous_access: false
       adapter: "none (opengov adapter to build)"
       implementation_status: "discovered"
-      probe: "2026-10-25 curl: api-east.viewpointcloud.com/v2/hempsteadny/record_types 200 (28 types incl. Building Permit; 26 view_access=public); /records 403 forbidden; search.viewpointcloud.com/graphql 403 Missing Authorization; portal config carries reCAPTCHA and Turnstile site keys"
+      probe: "2026-10-25 curl: api-east.viewpointcloud.com/v2/hempsteadny/record_types 200 (28 types incl. Building Permit; 26 view_access=public); /records 403 forbidden; search.viewpointcloud.com/graphql 403 Missing Authorization; portal config carries reCAPTCHA and Turnstile site keys. 2026-10-25 single Playwright check (stock headless Chromium): hempsteadny.portal.opengov.com renders 'An OpenGov portal does not exist for a community named hempsteadny'; no search box, no captcha, no login; no API calls made by the page (screenshot data/opengov_check/20261025T193354Z/01_home.png)"
       enumeration_status: "anonymous-enumeration-forbidden"
       known_exclusions: "Pre-OpenGov history not confirmed online; Playwright session check of portal public search still required"
       records_request:
@@ -964,9 +964,16 @@ source_inventory:
 
 destination:
   writes_in_scope: true
-  proven: false
-  mode: internal Query DB reconciliation (DuckDB per README); not yet bootstrapped
-  note: discovery only; bootstrap-oracle-infra has not run
+  proven: true
+  mode: "internal reconciliation store = local DuckDB file (operator decision 2026-10-25; no hosted database)"
+  project: oracle-property-intelligence-platform-pipeline-nassau-ny
+  environment: local-non-production
+  database_file: data/nassau.duckdb (repo-relative, gitignored)
+  writer: pipeline.run single writer (exclusive flock on data/.pipeline.lock)
+  independent_identity_sources:
+    - "pipeline/config.py DB_PATH resolves to <repo>/data/nassau.duckdb (code-configured path)"
+    - "duckdb_databases() on the opened connection reports the same file path, and pipeline_runs in that file holds the run ids written by this pipeline"
+  credentials: none (local file)
 
 enrichment:
   bbb:
@@ -974,12 +981,23 @@ enrichment:
     source_access_status: "403 Cloudflare challenge on /us/ny/*/category/roofing-contractors from local US egress (2026-10-25); robots.txt disallows query-string pagination"
     next_action: AWS remote BBB execution per bbb-harvest skill
   places:
-    status: discovered
+    status: loaded
     release: 2026-10-21.0
+    loaded_count: 78054
+    schema_note: "release 2026-10-21.0 has no categories column; uses basic_category and taxonomy (primary, hierarchy, alternates)"
+    licenses: "CDLA-Permissive-2.0 (all rows); some rows also Apache-2.0 or CC0-1.0"
     bbox: "-73.7683,40.5724,-73.4194,40.9192"
   contractor_license:
     status: discovered
     authority: Nassau County Department of Consumer Affairs (home improvement license)
     access: "Oracle APEX classic report, anonymous, no CAPTCHA, 15 rows/page, CSV/Excel download button (needs browser session)"
 
-approved_exceptions: []
+approved_exceptions:
+  - gate: parcel
+    reason: "Operator-approved 2026-10-25: 4.41 percent gap between the 2025 county roll (426460) and GIS polygons (407648) is roll sections 5 special franchise, 6 utility and 8 wholly exempt (15564 rows) that mostly have no tax-lot polygon; taxable roll section 1 gap is 0.79 percent"
+    approved_by: operator
+    approved_at: "2026-10-25"
+    canonical_denominator: "2025 county roll, 426460 rows (data.ny.gov 7vem-aaz7, city-roll SWIS 280500 and 280900 excluded)"
+    seed_decision: "Seed from roll; geometry joined by SBL; rows without geometry kept with null geometry"
+    excluded_population: none
+    coverage_effect: "Rows without a polygon have no point-in-polygon structure match and rely on the NYS centroid point (if any) for coordinates"

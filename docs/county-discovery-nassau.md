@@ -1,13 +1,13 @@
 # Nassau County, NY (FIPS 36059): county discovery
 
-Stage: **discovery and readiness only**. No seeding, ingestion, Query DB writes, or publication was run.
+Stage: discovery and readiness (sections 0–6), then **stage 2: parcel backbone built into a local DuckDB store** (section 7). No permit harvest, BBB, or publication.
 Probe date: 2026-10-25, from a US egress IP (`ipinfo.io/country` = `US`).
 Skills applied: `onboard-county` (intake/readiness stage), `county-discovery`, `county-readiness-preflight`.
 Machine-readable catalog: [`docs/nassau-sources.yaml`](nassau-sources.yaml). The readiness skills require this file before seeding, so it is drafted here.
 
 Legend: **[V]** = verified by a live probe in this session (curl/HTTP/REST, results recorded below). **[S]** = from web search or vendor/press pages, not probed. **[U]** = unverified estimate or assumption.
 
-Deviations from the stock skill instructions, at the operator's request: findings live in this repo's `docs/` rather than `skills/use-oracle/runtime/docs/`. Nothing was pushed, and no PR was opened to `elephant-xyz/Counties-trasform-scripts`. Playwright was not installed, so every browser-only check is listed as an open item. The Elephant MCP server failed to connect in this session and was not used.
+Deviations from the stock skill instructions, at the operator's request: findings live in this repo's `docs/` rather than `skills/use-oracle/runtime/docs/`. Nothing was pushed, and no PR was opened to `elephant-xyz/Counties-trasform-scripts`. Playwright was installed in stage 2 (project-local) for exactly one OpenGov check (section 7.6); the other browser-only checks remain open items. The Elephant MCP server failed to connect in this session and was not used.
 
 ---
 
@@ -21,7 +21,7 @@ Deviations from the stock skill instructions, at the operator's request: finding
 | GIS geometry | Nassau GIS `Hosted/Parcels_2026_Clean`: **407,648** polygons **[V]** |
 | Permit authorities | **69**: 3 towns (unincorporated areas), 2 cities, 64 villages **[V]** (Nassau GIS `My_Nassau/6 Villages_Cities`) |
 | Readiness validator | `validate-county-readiness.py docs/nassau-sources.yaml` returned **exit 1, overall BLOCKED** **[V]** |
-| Blocked gates | `parcel` (4.4% GIS vs full roll; needs operator-approved exception, see §1.6). `permit` (54 villages still `needs-review`). `destination` (not bootstrapped). `catalog_metadata` and `enrichment` PASS. |
+| Blocked gates | Discovery: `parcel`, `permit`, `destination`. **After stage 2:** `parcel` PASS (operator-approved exception), `destination` PASS (local DuckDB), `permit` still BLOCKED (54 villages `needs-review`). |
 | Preparation allowed / execution allowed | `true` / `false` |
 | Prior art | No Nassau flow, transform, or findings in the bundled runtime (`counties/` holds only duval and pinellas) **[V]**. The Counties-trasform-scripts repo was not checked (no network push/PR in scope). |
 
@@ -223,6 +223,122 @@ Next automated actions while blocked:
 - **Geo-blocking:** none observed from US egress. Non-US egress is untested.
 - **Data quality:** `LOC_ZIP` is null in centroid samples. Roll grid coordinates are 0. Glen Cove and Long Beach appear on both a city roll and a county roll (dedupe by SWIS).
 - **Privacy:** owner names and mailing addresses are public roll data, but publication must follow the privacy-limited Atlas rules. No owner names were printed or committed in this discovery.
+
+## 7. Stage 2: parcel backbone (2026-10-25)
+
+### 7.1 Operator decisions (recorded)
+
+- **APPROVED:** the 4.41% roll-vs-GIS parcel gap exception. The gap is roll sections 5/6/8 (franchise, utility, exempt) with no tax-lot polygon; the taxable section-1 gap is 0.79%. Recorded in `nassau-sources.yaml` under `approved_exceptions`; the validator's parcel gate now passes.
+- **APPROVED:** DuckDB 1.1.3 and Playwright 1.48.0 installs, all project-local: `.venv/`, `.duckdb/extensions`, `.playwright-browsers/`, all gitignored.
+- **Destination:** a local DuckDB file `data/nassau.duckdb`, gitignored, with no hosted database. `destination.proven: true`, backed by two identity sources: the code-configured path, and `duckdb_databases()` plus `pipeline_runs` in the opened file.
+- **FOIL:** drafts in [`docs/foil/`](foil/README.md), **not sent**.
+- No accounts created and no captcha, challenge, or login bypassed. The operator will create the Oyster Bay eTRAKiT account. No permit harvest, BBB, or Atlas publication in this stage.
+- **Readiness note:** the validator still returns BLOCKED, solely on the `permit` gate (54 villages `needs-review`). The parcel backbone was built on explicit operator direction. Permit harvest and pilot/full ingest remain gated.
+
+### 7.2 What was built
+
+The code (`pipeline/`) and operations doc ([`pipeline.md`](pipeline.md)) are committed; data lives only under `data/`.
+
+| Table | Rows | Source / notes |
+|---|---:|---|
+| `assessment_roll` | 2,129,622 | roll years 2021 425,126 · 2022 425,623 · 2023 426,023 · 2024 426,390 · 2025 426,460 (county-roll SWIS) |
+| `gis_parcels` | 407,648 | Nassau GIS `Parcels_2026_Clean`, polygons as GeoJSON (EPSG:4326) |
+| `nys_centroids` | 423,430 | NYS ITS centroid points with owner and mailing address |
+| `nsi_structures` | 408,465 | USACE NSI, 36 bbox tiles, `cbfips` 36059* |
+| `corporations` | 409,304 | NYS DOS active corporations, `county='NASSAU'` |
+| `overture_places` | 78,054 | Overture 2026-10-21.0, clipped to the Nassau TownCity union (148 roofing-related by name/taxonomy) |
+| `properties` | 426,460 | one row per 2025 county-roll parcel |
+| `parcel_gis_match` | 420,568 | `sbl_exact` 420,549 + `lot_unique_any_suffix_address_agrees` 19 |
+| `parcel_centroid_match` | 422,165 | `swis_printkey_address` 422,072 + `swis_printkey` 93 |
+| `nsi_parcel_match` / `parcel_structures` | 408,169 / 381,193 | point-in-polygon |
+| `roof_age_lineage` | 395,554 | per-property estimate, basis, caveat |
+| `ownership_history` / `ownership_events` / `ownership_signals` | 2,129,622 / 1,679,323 / 450,299 | 2021–2025 |
+| `pipeline_runs` / `source_snapshots` / `record_changes` / `tombstones` | 3 / 30 / 3,856,523 / 0 | run history |
+| support tables | | `roll_keys` 2,129,622 · `gis_keys` 407,648 · `gis_lots` 407,461 · `parcel_geoms` 407,461 · `nassau_situs_zips` 110 · `deed_book_calibration` 4 |
+
+**Coordinates.** 422,165 properties take lat/lon from NYS centroids. Another 139 fall back to a GIS polygon point-on-surface. 4,156 have no coordinates, mostly roll sections 5/6 (franchise/utility). 420,568 have a polygon.
+
+**Join quality.** On `sbl_exact` matches the GIS site address begins with the roll address 92.8% of the time; the rest are format differences (e.g. ranges, unit text). The first run's unguarded lot-only fallback agreed on address for only 1.6% of its 1,206 rows. It was replaced by an address-guarded fallback, which keeps 19.
+
+### 7.3 NSI year-built finding (roof-age proxy)
+
+- **Field:** `med_yr_blt` (integer). It is populated on all 408,465 Nassau structures.
+- **Definition:** the NSI technical documentation (HEC Confluence, read through the Internet Archive because the live site returned 503) says "`med_yr_blt` — Describing the median year built of structures within the Census Block." It is an **area statistic for the structure's 2010 Census Block**, not that structure's observed year built.
+- **Observed behaviour [V]:**
+  - only **39 distinct values** countywide;
+  - at most 2 distinct values within any of the 18,087 census blocks;
+  - range **1938–2005**, with a pile-up at 1938 (21,079 structures), consistent with a "1939 or earlier" bucket floor;
+  - the 2005 maximum shows the underlying vintage predates recent construction.
+- **NSI `source` field:** `P` (parcel) 375,009 and `H` 33,456. The docs define `H` as "HIFLD Hospital", which cannot be right for 33k Nassau structures. Treat `source` as unverified for `H`.
+- **Match rate:**
+  - 408,169 / 408,465 NSI points (**99.93%**) fall inside a Nassau GIS lot polygon, and 407,546 fall on a seed property's lot;
+  - **395,554 / 426,460 properties (92.8%)** have an estimate;
+  - for residential class 2xx: **370,738 / 372,642 (99.5%)**.
+- **Roof-age estimate:** `est_year_built = med_yr_blt` of the largest NSI structure on the lot, and `est_roof_age_years = as_of_year − est_year_built`. Basis is `nsi_med_yr_blt_census_block_median`, confidence `low`, assuming the original roof (no re-roof evidence, since permits are not ingested).
+  - The threshold is configurable (`--roof-age-threshold`, default **15**).
+  - **Caveat:** with a maximum of 2005, *every* estimated property exceeds 15 years (395,554 true; 30,906 unknown), so the default threshold does not discriminate. Higher thresholds do: more than 60 years for 368,402, more than 70 years for 217,184.
+  - Permit-based re-roof evidence is required before roof age is decision-grade.
+
+### 7.4 Ownership change and out-of-area owners
+
+**Ownership signals, 2021–2025 rolls** (`properties.ownership_signal`):
+- `no_change_observed_2021_2025` 333,207
+- `transfer_observed_2021_2025` 91,529
+- `insufficient_history` 1,724
+
+**Five-year caveat:** "no change observed" covers five rolls only. It **cannot prove "no sale in 10+ years."**
+
+**Deed-book estimate.** Nassau deed books are sequential. A linear fit of roll year on the median new deed book (2022–2025) gives slope 0.00649 year per book, about 154 books per year. It yields `deed_book_est_first_roll_year`:
+- `calibrated_range` 89,581
+- `extrapolated_before_calibration` 192,224 (low-confidence model estimate)
+- `no_deed_book` 144,655
+
+104,048 properties have an *extrapolated* estimate of 2016 or earlier. That is a candidate signal for "held 10+ years", not proof.
+
+**Out-of-area rule** (`owner_location_class`, from mailing state and ZIP5):
+- `out_of_state` (mailing state ≠ NY): 4,439
+- `ny_outside_nassau` (NY, ZIP not among the 110 Nassau situs ZIPs): 7,316
+- `in_nassau`: 414,653
+- `unknown`: 52
+- `foreign` is never assigned, because `mailing_address_country` is empty for every Nassau row.
+
+The out-of-area flag is `out_of_state` + `ny_outside_nassau` = **11,755**. Straddling ZIPs (11001, 11040, 11735, …) count as in-Nassau. `mailing_matches_situs` (owner-occupancy proxy) is true for 252,918.
+
+### 7.5 Incremental proof
+
+| Run | Mode | Code | Result |
+|---|---|---|---|
+| `20261025T193332Z` | initial (resumed twice, see 7.7) | 83d75af | all rows **new**: roll 2,129,622 · GIS 407,648 · centroids 423,430 · NSI 408,465 · corporations 409,304 · Overture 78,054 |
+| `20261025T224356Z` | `--full-refresh` (re-fetch + hash diff) | 340d4fd | **0 new / 0 changed / 0 removed** on every source; derived tables rebuilt in 7.6 s; 47 min, of which centroids took 30 min |
+| `20261025T233129Z` | incremental (watermarks) | 340d4fd | all watermarked sources `skipped-unchanged`; NSI (no watermark) re-fetched, 0 changes; derive skipped; 1.1 min |
+
+The Overture pinned release (immutable) is cached by release, so a full refresh re-diffs it but does not re-download it.
+
+### 7.6 OpenGov Playwright check (exactly one session)
+
+- **Setup:** stock headless Chromium 130 (Playwright 1.48), no stealth, no retry. Script `tools/opengov_check.py`.
+- **Result:** `https://hempsteadny.portal.opengov.com/` rendered **"An OpenGov portal does not exist for a community named 'hempsteadny'"**.
+- **What it showed:** no search input, no captcha, no login wall. The page made no record or search API calls.
+- **Evidence:** screenshot `data/opengov_check/20261025T193354Z/01_home.png` (gitignored), with `network.json` and `result.json` alongside.
+- **Conclusion:** the Town of Hempstead has **no anonymous public portal** at that address, even though its building page links `hempsteadny.viewpointcloud.com` and the tenant API serves record types. Anonymous permit search is not available. Route: FOIL (`docs/foil/01-town-of-hempstead.md`) or a town-provided export.
+
+### 7.7 Failures and fixes
+
+1. **Centroid error payloads.** In run 1 attempt 1, 46 of 424 NYS centroid windows came back as HTTP 200 with `{"error":{"code":500,"message":"Error performing query operation"}}` and were cached. The run failed at the merge.
+   - Fix (commit 83d75af): payload validation before caching, exponential-backoff retry, and window splitting.
+   - The DuckDB file was reset, and the run resumed under the same run id, reusing the immutable pages.
+   - The first failed attempt's `pipeline_runs` row is gone because of the reset; its log is `data/logs/run1_attempt1_failed.log`.
+2. **Overture schema.** In run 1 attempt 2, the Overture extract failed with `Binder Error: Referenced table "categories" not found`. Release 2026-10-21.0 has no `categories` column (verified by `DESCRIBE`); it uses `basic_category` and `taxonomy`. Fixed in commit 340d4fd, and the run resumed. Completed steps were skipped, with deltas rebuilt from `record_changes`.
+3. **Unguarded GIS fallback.** The first derive's lot-only fallback was mostly wrong (1.6% address agreement). Guarded in 340d4fd; run 2 rebuilt derived tables with the fix.
+4. **Docs outage.** The NSI technical docs returned 503 live; I read the Internet Archive copy instead.
+
+**Speed limits observed:**
+- NYS centroid server: 7–30 min per full pass; serves intermittent error payloads under load.
+- NSI: 45 s to 11 min per pass.
+- Roll: about 2–3 min per year to fetch (about 25 s when pages are reused).
+- GIS: about 3 min.
+
+---
 
 ## Appendix: probe log (2026-10-25)
 
