@@ -342,18 +342,23 @@ class OverturePlaces:
                 COPY (
                   WITH b AS (SELECT ST_Union_Agg(geom) AS g FROM ST_Read('{boundary_geojson}')),
                   p AS (
-                    SELECT id, names.primary AS name, categories.primary AS category,
-                           array_to_string(categories.alternate, '|') AS alt_categories,
-                           confidence, array_to_string(websites, '|') AS websites,
-                           array_to_string(phones, '|') AS phones,
-                           addresses[1].freeform AS address, addresses[1].locality AS locality,
-                           addresses[1].postcode AS postcode, addresses[1].region AS region,
-                           brand.names.primary AS brand,
-                           array_to_string(list_transform(sources, s -> s.dataset), '|') AS source_datasets,
+                    -- release 2026-10-21.0 has no `categories`; it uses basic_category + taxonomy
+                    SELECT t.id, t.names.primary AS name, t.basic_category AS basic_category,
+                           t.taxonomy.primary AS taxonomy_primary,
+                           array_to_string(t.taxonomy.hierarchy, '>') AS taxonomy_hierarchy,
+                           array_to_string(t.taxonomy.alternates, '|') AS taxonomy_alternates,
+                           t.operating_status,
+                           t.confidence, array_to_string(t.websites, '|') AS websites,
+                           array_to_string(t.phones, '|') AS phones,
+                           t.addresses[1].freeform AS address, t.addresses[1].locality AS locality,
+                           t.addresses[1].postcode AS postcode, t.addresses[1].region AS region,
+                           t.brand.names.primary AS brand,
+                           array_to_string(list_transform(t.sources, s -> s.dataset), '|') AS source_datasets,
+                           array_to_string(list_distinct(list_transform(t.sources, s -> s.license)), '|') AS source_licenses,
                            -- places are points, so bbox xmin/ymin equal the point coordinates
-                           bbox.xmin AS lon, bbox.ymin AS lat
-                    FROM read_parquet('{self.cfg['s3_glob']}', hive_partitioning=1)
-                    WHERE bbox.xmin BETWEEN {x0} AND {x1} AND bbox.ymin BETWEEN {y0} AND {y1}
+                           t.bbox.xmin AS lon, t.bbox.ymin AS lat
+                    FROM read_parquet('{self.cfg['s3_glob']}', hive_partitioning=1) t
+                    WHERE t.bbox.xmin BETWEEN {x0} AND {x1} AND t.bbox.ymin BETWEEN {y0} AND {y1}
                   )
                   SELECT p.* FROM p, b WHERE ST_Contains(b.g, ST_Point(p.lon, p.lat))
                   ORDER BY id

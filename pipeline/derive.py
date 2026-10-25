@@ -82,10 +82,17 @@ def build(con, run_id: str, roof_age_threshold: int, as_of: date) -> dict:
     exact AS (SELECT r.record_key, g.gis_record_key, 'sbl_exact' AS method FROM r JOIN parcel_geoms g ON r.sbl_key = g.sbl_key),
     lot_unique AS (
       SELECT lot_key, any_value(gis_record_key) AS gis_record_key FROM parcel_geoms GROUP BY lot_key HAVING count(*) = 1),
+    -- Fallback only when the lot is unique in GIS AND the situs address agrees: run 1 showed
+    -- an unguarded lot-only fallback agreed on address for just 1.6% of 1,206 rows.
     fallback AS (
-      SELECT r.record_key, l.gis_record_key, 'lot_unique_any_suffix' AS method
+      SELECT r.record_key, l.gis_record_key, 'lot_unique_any_suffix_address_agrees' AS method
       FROM r JOIN lot_unique l ON r.lot_key = l.lot_key
-      WHERE r.record_key NOT IN (SELECT record_key FROM exact))
+      JOIN assessment_roll a ON a.record_key = r.record_key AND a.roll_year = r.roll_year
+      JOIN parcel_geoms pg ON pg.gis_record_key = l.gis_record_key
+      JOIN gis_parcels gp ON gp.record_key = pg.gis_record_key AND gp.is_active
+      WHERE r.record_key NOT IN (SELECT record_key FROM exact)
+        AND trim(concat_ws(' ', a.parcel_address_number, a.parcel_address_street)) <> ''
+        AND upper(gp.parcel_address) LIKE upper(trim(concat_ws(' ', a.parcel_address_number, a.parcel_address_street))) || '%')
     SELECT * FROM exact UNION ALL SELECT * FROM fallback""")
 
     con.execute(f"""

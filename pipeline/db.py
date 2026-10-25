@@ -57,6 +57,7 @@ def connect(path=None) -> duckdb.DuckDBPyConnection:
         CREATE TABLE IF NOT EXISTS source_snapshots (
             run_id VARCHAR, source VARCHAR, scope VARCHAR, watermark JSON, action VARCHAR,
             staged_rows BIGINT, artifact_dir VARCHAR, manifest_sha256 VARCHAR, recorded_at TIMESTAMPTZ)""")
+    con.execute("ALTER TABLE source_snapshots ADD COLUMN IF NOT EXISTS delta JSON")
     con.execute("""
         CREATE TABLE IF NOT EXISTS record_changes (
             run_id VARCHAR, table_name VARCHAR, scope VARCHAR, record_key VARCHAR, change_type VARCHAR)""")
@@ -133,9 +134,29 @@ def merge(con, run_id: str, table: str, stage_sql: str, key_expr: str, hash_cols
 
 
 def record_snapshot(con, run_id, source, scope, watermark, action, staged_rows=None, artifact_dir=None,
-                    manifest_sha256=None):
-    con.execute("INSERT INTO source_snapshots VALUES (?,?,?,?,?,?,?,?, now())",
-                [run_id, source, scope, json.dumps(watermark), action, staged_rows, artifact_dir, manifest_sha256])
+                    manifest_sha256=None, delta=None):
+    con.execute("""INSERT INTO source_snapshots (run_id, source, scope, watermark, action, staged_rows, artifact_dir,
+                   manifest_sha256, recorded_at, delta) VALUES (?,?,?,?,?,?,?,?, now(), ?)""",
+                [run_id, source, scope, json.dumps(watermark), action, staged_rows, artifact_dir, manifest_sha256,
+                 json.dumps(delta, default=str) if delta is not None else None])
+
+
+def completed_step(con, run_id: str, source: str, scope: str, table: str, change_scope: str):
+    """For a resumed run: the delta of a step already merged earlier in the same run, or None."""
+    row = con.execute("""SELECT staged_rows, delta FROM source_snapshots
+                         WHERE run_id=? AND source=? AND scope=? AND action IN ('fetched','skipped-unchanged')
+                         ORDER BY recorded_at DESC LIMIT 1""", [run_id, source, scope]).fetchone()
+    if not row:
+        return None
+    if row[1]:
+        return json.loads(row[1])
+    counts = dict(con.execute("""SELECT change_type, count(*) FROM record_changes
+                                 WHERE run_id=? AND table_name=? AND scope=? GROUP BY 1""",
+                              [run_id, table, change_scope]).fetchall())
+    staged = row[0] or 0
+    new, changed, removed = counts.get("new", 0), counts.get("changed", 0), counts.get("removed", 0)
+    return {"staged": staged, "new": new, "changed": changed, "unchanged": staged - new - changed,
+            "removed": removed, "action": "fetched"}
 
 
 def last_watermark(con, source: str, scope: str):

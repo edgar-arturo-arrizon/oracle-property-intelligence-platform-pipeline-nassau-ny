@@ -78,19 +78,29 @@ def main(argv=None) -> int:
         any_change = False
         t_run = time.time()
 
-        def step(source_key: str, scope: str, adapter, fetch_and_merge):
+        def step(source_key: str, scope: str, adapter, fetch_and_merge, table: str, change_scope: str = ""):
             nonlocal any_change
             t0 = time.time()
+            done = db.completed_step(con, run_id, adapter.name, scope, table, change_scope)
+            if done is not None:  # resumed run: this step already merged in this run
+                done["resumed"] = True
+                done.setdefault("seconds", None)
+                deltas[f"{source_key}:{scope}"] = done
+                sources_log.append({"source": adapter.name, "scope": scope, "action": done["action"], "resumed": True})
+                if done["new"] or done["changed"] or done["removed"]:
+                    any_change = True
+                print(f"[{run_id}] {source_key}:{scope} already completed in this run: {done}", flush=True)
+                return
             wm = adapter.watermark()
             prev = db.last_watermark(con, adapter.name, scope)
             if not args.full_refresh and prev is not None and prev == wm and "always fetch" not in json.dumps(wm):
-                db.record_snapshot(con, run_id, adapter.name, scope, wm, "skipped-unchanged")
                 d = {"staged": 0, "new": 0, "changed": 0, "unchanged": None, "removed": 0, "action": "skipped-unchanged"}
+                db.record_snapshot(con, run_id, adapter.name, scope, wm, "skipped-unchanged", delta=d)
             else:
                 d = fetch_and_merge()
                 d["action"] = "fetched"
                 db.record_snapshot(con, run_id, adapter.name, scope, wm, "fetched", d.get("staged"),
-                                   str(config.RAW_DIR / adapter.name / run_id), _manifest_sha(adapter.name, run_id))
+                                   str(config.RAW_DIR / adapter.name / run_id), _manifest_sha(adapter.name, run_id), delta=d)
             d["seconds"] = round(time.time() - t0, 1)
             deltas[f"{source_key}:{scope}"] = d
             sources_log.append({"source": adapter.name, "scope": scope, "watermark": wm, "action": d["action"]})
@@ -108,7 +118,7 @@ def main(argv=None) -> int:
                         return db.merge(con, run_id, "assessment_roll", _ndjson_select(path, cols),
                                         "swis_code || '|' || print_key_code || '|' || coalesce(parcel_address_number,'') || '|' || coalesce(parcel_address_street,'')",
                                         config.SOCRATA_ROLL["columns"], scope_col="roll_year", scope_val=str(y))
-                    step("roll", str(y), roll, fm)
+                    step("roll", str(y), roll, fm, "assessment_roll", f"roll_year={y}")
 
             if "gis" in wanted:
                 gis = GisParcels()
@@ -118,7 +128,7 @@ def main(argv=None) -> int:
                     biz = [c for c in cols if c not in db.PROVENANCE_COLS and c != "last_edited_date"] + ["last_edited_date"]
                     return db.merge(con, run_id, "gis_parcels", _ndjson_select(path, cols),
                                     "coalesce(parid, 'oid:' || objectid)", biz)
-                step("gis", "all", gis, fm)
+                step("gis", "all", gis, fm, "gis_parcels")
 
             if "centroids" in wanted:
                 cen = NysCentroids()
@@ -128,7 +138,7 @@ def main(argv=None) -> int:
                     biz = [c for c in cols if c not in db.PROVENANCE_COLS and c != "OBJECTID"]
                     return db.merge(con, run_id, "nys_centroids", _ndjson_select(path, cols),
                                     "coalesce(SWIS_SBL_ID, 'oid:' || OBJECTID)", biz)
-                step("centroids", "nassau", cen, fm)
+                step("centroids", "nassau", cen, fm, "nys_centroids")
 
             if "nsi" in wanted:
                 nsi = Nsi()
@@ -137,7 +147,7 @@ def main(argv=None) -> int:
                     cols = _ndjson_keys(path)
                     biz = [c for c in cols if c not in db.PROVENANCE_COLS]
                     return db.merge(con, run_id, "nsi_structures", _ndjson_select(path, cols), "fd_id", biz)
-                step("nsi", config.FIPS, nsi, fm)
+                step("nsi", config.FIPS, nsi, fm, "nsi_structures")
 
             if "corporations" in wanted:
                 corp = Corporations()
@@ -146,7 +156,7 @@ def main(argv=None) -> int:
                     cols = _ndjson_keys(path, sample=50000)
                     biz = [c for c in cols if c not in db.PROVENANCE_COLS]
                     return db.merge(con, run_id, "corporations", _ndjson_select(path, cols), "dos_id", biz)
-                step("corporations", "nassau", corp, fm)
+                step("corporations", "nassau", corp, fm, "corporations")
 
             if "overture" in wanted:
                 ov = OverturePlaces()
@@ -159,7 +169,7 @@ def main(argv=None) -> int:
                              f"'{meta['release']}' AS overture_release FROM read_parquet('{pq}')")
                     cols = [r[0] for r in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{pq}')").fetchall()]
                     return db.merge(con, run_id, "overture_places", stage, "id", cols + ["overture_release"])
-                step("overture", OverturePlaces.cfg["release"], ov, fm)
+                step("overture", OverturePlaces.cfg["release"], ov, fm, "overture_places")
 
             derived_stats = None
             if any_change or args.full_refresh or not db.table_exists(con, "properties"):
@@ -198,7 +208,7 @@ def print_summary(run_id, counts, deltas, seconds):
     print(f"\n=== run {run_id} finished in {seconds/60:.1f} min ===")
     print(f"{'source:scope':38} {'action':18} {'staged':>8} {'new':>8} {'changed':>8} {'removed':>8} {'secs':>7}")
     for k, d in deltas.items():
-        print(f"{k:38} {d['action']:18} {d['staged'] or 0:>8} {d['new']:>8} {d['changed']:>8} {d['removed']:>8} {d['seconds']:>7}")
+        print(f"{k:38} {d['action']:18} {d['staged'] or 0:>8} {d['new']:>8} {d['changed']:>8} {d['removed']:>8} {str(d.get('seconds')):>7}")
     print(f"\n{'table':28} {'rows':>10} {'active':>10}")
     for t, c in counts.items():
         print(f"{t:28} {c['rows']:>10} {'' if c['active'] is None else c['active']:>10}")
