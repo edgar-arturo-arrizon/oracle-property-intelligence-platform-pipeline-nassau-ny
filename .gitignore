@@ -1,0 +1,9 @@
+# Raw captures, DuckDB files, screenshots and any downloaded data never go to Git.
+data/
+# Local tooling (project-local installs)
+.venv/
+.playwright-browsers/
+.duckdb/
+__pycache__/
+*.pyc
+.DS_Store
