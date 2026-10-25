@@ -7,3 +7,7 @@ data/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Local secrets (portal credentials) never go to Git.
+.env
+.env.*
