@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 from . import config
-from .fetch import ArtifactStore, http_get, utcnow
+from .fetch import ArtifactStore, FetchError, http_get, utcnow
 
 STAGE_DIR = config.DATA_DIR / "stage"
 
@@ -27,6 +27,16 @@ def _stage_path(source: str, run_id: str, name: str) -> Path:
     d = STAGE_DIR / source / run_id
     d.mkdir(parents=True, exist_ok=True)
     return d / f"{name}.ndjson.gz"
+
+
+def validate_json_payload(body: bytes) -> None:
+    """Raise ValueError when a 200 response carries a JSON error object (ArcGIS/Socrata)."""
+    try:
+        data = json.loads(body)
+    except Exception as exc:
+        raise ValueError(f"non-JSON payload: {exc}")
+    if isinstance(data, dict) and ("error" in data or data.get("errorCode")):
+        raise ValueError(f"error payload: {str(data)[:200]}")
 
 
 def _prov(art) -> dict:
@@ -67,7 +77,7 @@ def _socrata_pages(store: ArtifactStore, prefix: str, url: str, where: str, sele
         params = {"$where": where, "$order": order, "$limit": page_size, "$offset": off}
         if select:
             params["$select"] = select
-        art = store.fetch(f"{prefix}_p{i:04d}", url, params, timeout=300)
+        art = store.fetch(f"{prefix}_p{i:04d}", url, params, timeout=300, validate=validate_json_payload)
         yield art, json.loads(store.read(art))
     return total
 
@@ -158,7 +168,7 @@ class GisParcels:
             params = {"where": "1=1", "outFields": ",".join(self.cfg["out_fields"]), "outSR": "4326",
                       "orderByFields": "objectid", "resultOffset": off, "resultRecordCount": size,
                       "f": "geojson"}
-            return store.fetch(f"parcels_p{i:04d}", q, params, timeout=300)
+            return store.fetch(f"parcels_p{i:04d}", q, params, timeout=300, validate=validate_json_payload)
 
         with cf.ThreadPoolExecutor(self.cfg["concurrency"]) as ex:
             arts = list(ex.map(one, jobs))
@@ -184,7 +194,8 @@ class TownBoundary:
     def fetch(self, run_id: str) -> Path:
         store = ArtifactStore(self.name, run_id)
         art = store.fetch("towncity", self.cfg["layer_url"] + "/query",
-                          {"where": "1=1", "outFields": "town,city,label", "outSR": "4326", "f": "geojson"})
+                          {"where": "1=1", "outFields": "town,city,label", "outSR": "4326", "f": "geojson"},
+                          validate=validate_json_payload)
         path = config.RAW_DIR / self.name / run_id / "towncity.geojson"
         path.write_bytes(store.read(art))
         return path
@@ -219,14 +230,30 @@ class NysCentroids:
         step = self.cfg["oid_step"]
         jobs = list(enumerate(range(mn, mx + 1, step)))
 
-        def one(job):
-            i, lo = job
-            params = {"where": f"{self.cfg['where']} AND OBJECTID>={lo} AND OBJECTID<{lo + step}",
+        def window(lo, width):
+            params = {"where": f"{self.cfg['where']} AND OBJECTID>={lo} AND OBJECTID<{lo + width}",
                       "outFields": ",".join(self.cfg["out_fields"]), "outSR": "4326", "f": "json"}
-            return store.fetch(f"oid_{lo}", q, params, timeout=300)
+            name = f"oid_{lo}" if width == step else f"oid_{lo}_w{width}"
+            return store.fetch(name, q, params, timeout=300, validate=validate_json_payload, attempts=4)
+
+        def one(job):
+            # The state server intermittently answers 200 + {"error": 500}. Retry the window;
+            # if it keeps failing, split it in halves (down to 125 OIDs) so a heavy window
+            # cannot block the whole county.
+            i, lo = job
+            pending, done = [(lo, step)], []
+            while pending:
+                a, w = pending.pop(0)
+                try:
+                    done.append(window(a, w))
+                except FetchError:
+                    if w <= 125:
+                        raise
+                    pending += [(a, w // 2), (a + w // 2, w - w // 2)]
+            return done
 
         with cf.ThreadPoolExecutor(self.cfg["concurrency"]) as ex:
-            arts = list(ex.map(one, jobs))
+            arts = [a for group in ex.map(one, jobs) for a in group]
         w = _Writer(path)
         for art in arts:
             data = json.loads(store.read(art))
@@ -273,7 +300,7 @@ class Nsi:
 
         def one(t):
             name, poly = t
-            return store.fetch(name, self.cfg["api_url"], {"bbox": poly}, timeout=600)
+            return store.fetch(name, self.cfg["api_url"], {"bbox": poly}, timeout=600, validate=validate_json_payload)
 
         with cf.ThreadPoolExecutor(self.cfg["concurrency"]) as ex:
             arts = list(ex.map(one, list(self._tiles())))

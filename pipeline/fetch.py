@@ -95,13 +95,32 @@ class ArtifactStore:
                 fh.write(json.dumps({"name": name, **art.__dict__}) + "\n")
         return art
 
-    def fetch(self, name: str, url: str, params: dict | None = None, timeout: int = 120) -> Artifact:
+    def fetch(self, name: str, url: str, params: dict | None = None, timeout: int = 120,
+              validate=None, attempts: int = 5, backoff: float = 5.0) -> Artifact:
+        """Fetch once per (run, name). ``validate(body)`` must raise ValueError for an error
+        payload (e.g. an HTTP 200 carrying an ArcGIS error object); invalid bodies are never
+        cached and are retried with exponential backoff."""
         cached = self.get(name)
         if cached:
-            return cached
-        fetched_at = utcnow()
-        full, body = http_get(url, params, timeout=timeout)
-        return self.put(name, full, body, fetched_at)
+            if validate is None:
+                return cached
+            try:
+                validate(self.read(cached))
+                return cached
+            except ValueError:
+                pass  # a previously cached error payload: refetch
+        last: Exception | None = None
+        for attempt in range(attempts):
+            fetched_at = utcnow()
+            full, body = http_get(url, params, timeout=timeout)
+            try:
+                if validate is not None:
+                    validate(body)
+                return self.put(name, full, body, fetched_at)
+            except ValueError as exc:
+                last = exc
+                time.sleep(backoff * (2 ** attempt))
+        raise FetchError(f"invalid payload after {attempts} attempts for {name}: {last}")
 
     def read(self, art: Artifact) -> bytes:
         with gzip.open(art.path, "rb") as fh:
