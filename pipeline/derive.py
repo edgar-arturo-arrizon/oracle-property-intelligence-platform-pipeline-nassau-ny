@@ -264,7 +264,8 @@ def build(con, run_id: str, roof_age_threshold: int, as_of: date) -> dict:
     SELECT property_key, est_year_built, est_year_built_basis, est_roof_age_years, est_roof_older_than_threshold,
            roof_age_threshold_years, roof_age_confidence, roof_age_as_of, nsi_primary_fd_id, gis_record_key,
            'NSI med_yr_blt = median year built of structures in the structure''s 2010 Census Block (USACE NSI technical documentation); '
-           || 'not the structure''s own year built. Original-roof assumption: no re-roof evidence applied (permits not ingested). '
+           || 'not the structure''s own year built. Original-roof assumption: this NSI-only estimate applies no re-roof evidence '
+           || '(permit evidence, where available, is applied separately in property_roof_age). '
            || 'Structure->parcel by point-in-polygon against Nassau GIS lot polygons; primary structure = largest NSI sqft.' AS caveat,
            '{run_id}' AS derived_run
     FROM properties WHERE est_year_built IS NOT NULL""")

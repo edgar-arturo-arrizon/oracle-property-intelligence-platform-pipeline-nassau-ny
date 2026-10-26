@@ -117,10 +117,13 @@ LIMITATIONS = [
     "'no sale in 10+ years'; a parcel with no observed change is 'no change observed "
     "2021-2025', not 'unchanged for 10+ years'.",
     "Deed book/page is ~66% populated on the 2025 Nassau roll; missing values are not treated as changes.",
-    "Roof age is an estimate: NSI med_yr_blt is the median year built of structures in the "
-    "structure's 2010 Census Block (not the structure's own year built), and no re-roof "
-    "evidence is applied because permits are not yet ingested.",
+    "Roof age in `properties`/`roof_age_lineage` is NSI-only: NSI med_yr_blt is the median year "
+    "built of structures in the structure's 2010 Census Block (not the structure's own year "
+    "built), and these two tables apply no re-roof evidence. eTRAKiT permit evidence, where a "
+    "closed roofing permit is linked to the property, is applied in `property_roof_age` instead "
+    "(see etrakit_derive.build_roof_age); that table falls back to the same NSI estimate only "
+    "when no closed roofing permit is linked.",
     "Out-of-area owner uses the mailing ZIP vs the set of Nassau situs ZIPs; ZIPs that "
     "straddle Queens/Suffolk (e.g. 11001, 11040, 11735) count as in-area.",
-    "No permits, BBB, or contractor licences are ingested in this stage.",
+    "BBB and contractor licences are not ingested in this stage; eTRAKiT permits (Oyster Bay scope) are.",
 ]

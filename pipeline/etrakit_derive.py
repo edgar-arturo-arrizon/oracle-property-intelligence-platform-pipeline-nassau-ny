@@ -110,10 +110,10 @@ def build_roof_age(con, run_id: str, as_of: date, threshold: int) -> None:
            CASE WHEN d.permit_no IS NOT NULL THEN 'roofing_permit_closed'
                 WHEN p.est_year_built IS NOT NULL THEN 'nsi_census_block_median_estimate' ELSE 'unknown' END AS roof_age_basis,
            CASE WHEN d.permit_no IS NOT NULL THEN CAST(year(CAST(d.event_date AS DATE)) AS INTEGER) ELSE p.est_year_built END AS roof_year,
-           CASE WHEN d.permit_no IS NOT NULL THEN {y} - year(CAST(d.event_date AS DATE)) ELSE p.est_roof_age_years END AS roof_age_years,
+           CASE WHEN d.permit_no IS NOT NULL THEN {y} - year(CAST(d.event_date AS DATE)) ELSE {y} - p.est_year_built END AS roof_age_years,
            CASE WHEN d.permit_no IS NOT NULL THEN d.roofing_confidence WHEN p.est_year_built IS NOT NULL THEN 'low' END AS confidence,
            CASE WHEN d.permit_no IS NOT NULL THEN ({y} - year(CAST(d.event_date AS DATE))) > {threshold}
-                WHEN p.est_year_built IS NOT NULL THEN p.est_roof_older_than_threshold END AS roof_older_than_threshold,
+                WHEN p.est_year_built IS NOT NULL THEN ({y} - p.est_year_built) > {threshold} END AS roof_older_than_threshold,
            {threshold} AS threshold_years, d.permit_no AS evidence_permit_no, d.event_date AS evidence_date, d.event_basis AS evidence_date_basis,
            p.est_year_built AS nsi_est_year_built, p.est_roof_age_years AS nsi_est_roof_age_years,
            coalesce(o.open_roofing_permits, 0) AS open_roofing_permits, o.longest_open_roofing_years, o.an_open_roofing_permit,

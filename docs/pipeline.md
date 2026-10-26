@@ -24,7 +24,7 @@ DuckDB extensions install to `.duckdb/extensions` and Chromium to `.playwright-b
 
 | Table | Source | Key | Watermark |
 |---|---|---|---|
-| `assessment_roll` | data.ny.gov `7vem-aaz7`, roll years 2021–2025, Nassau county-roll SWIS (city-roll SWIS 280500/280900 dropped) | `swis|print_key|addr_no|street` (+`#n` for 0.16% exact duplicates) per `roll_year` scope | Socrata `rowsUpdatedAt` |
+| `assessment_roll` | data.ny.gov `7vem-aaz7`, roll years 2021–2025, Nassau county-roll SWIS (city-roll SWIS 280500/280900 dropped) | `swis / print_key / addr_no / street` (+`#n` for 0.16% exact duplicates) per `roll_year` scope | Socrata `rowsUpdatedAt` |
 | `gis_parcels` | Nassau GIS `Hosted/Parcels_2026_Clean` (GeoJSON, EPSG:4326) | `parid` | count + max OID + max edit date |
 | `nys_centroids` | NYS ITS `NYS_Tax_Parcel_Centroid_Points`, `COUNTY_NAME='Nassau'` | `SWIS_SBL_ID` | min/max OID + count |
 | `nsi_structures` | USACE NSI API, 6×6 bbox tiles, filtered to `cbfips` 36059* | `fd_id` | none (always fetched) |
@@ -72,4 +72,4 @@ The rolls cover 2021–2025 only. `no_change_observed_2021_2025` means no owner-
 
 ### Roof-age caveat
 
-`est_year_built` is NSI `med_yr_blt`, which the NSI technical documentation defines as "the median year built of structures within the Census Block". It is an area statistic, not the structure's own year built. No re-roof evidence is applied because permits are not ingested. Confidence is `low`.
+`est_year_built` is NSI `med_yr_blt`, which the NSI technical documentation defines as "the median year built of structures within the Census Block". It is an area statistic, not the structure's own year built. This NSI-only estimate applies no re-roof evidence; permit evidence, where a closed roofing permit is linked, is applied separately in `property_roof_age`. Confidence is `low`.

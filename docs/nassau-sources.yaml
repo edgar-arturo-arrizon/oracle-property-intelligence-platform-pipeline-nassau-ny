@@ -43,20 +43,20 @@ permits:
       key: "town-of-hempstead"
       status: "blocked"
       vendor: "OpenGov Permitting & Licensing (ViewpointCloud tenant hempsteadny)"
-      portal_kind: "historical-search"
+      portal_kind: "no-public-historical-search"
       portal: "https://hempsteadny.portal.opengov.com/"
-      historical_records: true
+      historical_records: false
       anonymous_access: false
       adapter: "none (opengov adapter to build)"
       implementation_status: "discovered"
       probe: "2026-10-25 curl: api-east.viewpointcloud.com/v2/hempsteadny/record_types 200 (28 types incl. Building Permit; 26 view_access=public); /records 403 forbidden; search.viewpointcloud.com/graphql 403 Missing Authorization; portal config carries reCAPTCHA and Turnstile site keys. 2026-10-25 single Playwright check (stock headless Chromium): hempsteadny.portal.opengov.com renders 'An OpenGov portal does not exist for a community named hempsteadny'; no search box, no captcha, no login; no API calls made by the page (screenshot data/opengov_check/20261025T193354Z/01_home.png)"
       enumeration_status: "anonymous-enumeration-forbidden"
-      known_exclusions: "Pre-OpenGov history not confirmed online; Playwright session check of portal public search still required"
+      known_exclusions: "Pre-OpenGov history not confirmed online; Playwright session check of portal public search is complete (2026-10-25) -- the portal page itself reports no OpenGov community exists for hempsteadny, so this jurisdiction has no working public historical search and must go through records-request instead"
       records_request:
         recipient_office: "Town of Hempstead Department of Buildings / Town Clerk Records Access Officer (FOIL)"
-        request_portal_url: "https://hempsteadny.portal.opengov.com/"
+        request_portal_url: "https://hempsteadny.gov/"
         system_scope: "Complete issued building-permit history (roofing first) with section-block-lot, permit type, status, issue/final/close dates, contractor name and Nassau OCA license number"
-        route: "api-first"
+        route: "records-first"
     - jurisdiction: "Town of North Hempstead (unincorporated)"
       key: "town-of-north-hempstead"
       status: "blocked"

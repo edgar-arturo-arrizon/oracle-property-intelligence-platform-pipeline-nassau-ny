@@ -16,7 +16,7 @@ from datetime import date
 STRONG_DESC = re.compile(r"\bre-?roof(?:ing)?\b|\broofing\b|\bshingl(?:e|es|ing)\b|\btear[- ]?off\b|"
                          r"\broof\s*(?:replacement|replace|repair|covering|install\w*|over|overlay|membrane)\b|\bnew\s+roof\b", re.I)
 WEAK_DESC = re.compile(r"\broofs?\b", re.I)
-NOT_REROOF_CONTEXT = re.compile(r"solar|photovolt|\bpv\b|antenna|dormer|addition|\bdeck\b|skylight|vent|gutter|chimney|"
+NOT_REROOF_CONTEXT = re.compile(r"\bsolar\b|\bphotovolt\w*\b|\bpv\b|\bantenna\b|\bdormer\b|\baddition\b|\bdeck\b|\bskylight\b|\bvents?\b|\bventilat\w*\b|\bgutter\b|\bchimney\b|"
                                 r"roof\s*top\s*(?:unit|hvac|a/?c)|\brtu\b", re.I)
 ROLE_ROOFER = re.compile(r"roof", re.I)
 NAME_ROOF = re.compile(r"\broof(?:ing|er|ers)?\b|\bshingle", re.I)

@@ -19,7 +19,7 @@ import time
 import traceback
 from datetime import date, datetime, timezone
 
-from . import config, db, derive
+from . import config, db, derive, etrakit_derive
 from .sources import (AssessmentRoll, Corporations, GisParcels, Nsi, NysCentroids, OverturePlaces,
                       TownBoundary)
 
@@ -172,9 +172,34 @@ def main(argv=None) -> int:
                 step("overture", OverturePlaces.cfg["release"], ov, fm, "overture_places")
 
             derived_stats = None
-            if any_change or args.full_refresh or not db.table_exists(con, "properties"):
+            # Rebuild derived tables whenever a source changed, this is the first run, the
+            # requested roof-age-threshold/as-of differs from the last *succeeded* run's settings,
+            # or the immediately preceding run did not succeed (so its derived tables may be stale
+            # or only partially written even though source rows look unchanged now).
+            last_succeeded = con.execute(
+                "SELECT parameters FROM pipeline_runs WHERE run_id <> ? AND status='succeeded' "
+                "ORDER BY started_at DESC LIMIT 1", [run_id]).fetchone()
+            settings_changed = False
+            if last_succeeded is not None:
+                prev_params = json.loads(last_succeeded[0])
+                settings_changed = (prev_params.get("roof_age_threshold_years") != args.roof_age_threshold
+                                     or prev_params.get("as_of") != args.as_of)
+            prev_run = con.execute(
+                "SELECT status FROM pipeline_runs WHERE run_id <> ? ORDER BY started_at DESC LIMIT 1",
+                [run_id]).fetchone()
+            prev_failed = prev_run is not None and prev_run[0] != "succeeded"
+            if any_change or args.full_refresh or not db.table_exists(con, "properties") or settings_changed or prev_failed:
+                if not any_change and not args.full_refresh and db.table_exists(con, "properties"):
+                    reason = "settings changed" if settings_changed else "previous run did not succeed"
+                    print(f"[{run_id}] no source changes, but rebuilding derived tables anyway ({reason})", flush=True)
                 t0 = time.time()
                 derived_stats = derive.build(con, run_id, args.roof_age_threshold, as_of)
+                # properties (and property_key) just changed; re-link eTRAKiT permits and rebuild
+                # property_roof_age against the fresh keys now, rather than waiting for the next
+                # etrakit_load batch to happen to run and overwrite them with current data.
+                if db.table_exists(con, "etrakit_permits"):
+                    etrakit_stats = etrakit_derive.build(con, run_id, as_of, args.roof_age_threshold)
+                    derived_stats = {**derived_stats, "etrakit_relink": etrakit_stats}
                 print(f"[{run_id}] derived tables rebuilt in {time.time() - t0:.1f}s {derived_stats}", flush=True)
             else:
                 print(f"[{run_id}] no source changes; derived tables left as-is", flush=True)
