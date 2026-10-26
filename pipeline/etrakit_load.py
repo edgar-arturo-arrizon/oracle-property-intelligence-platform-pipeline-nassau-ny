@@ -163,26 +163,41 @@ def _git() -> str:
         return "unknown"
 
 
-def decide_scope(permit_budget: int, min_total: int = 1) -> dict:
-    """Pick the highest-permit blocks of the current scope up to ``permit_budget`` returned permits; record every block."""
+def _estimate(v: dict, ratio: float) -> tuple[int, int]:
+    """(capturable permits, requests) for a counted block. Cap-hit blocks recover ~ratio of the reported total through
+    lot-prefix splitting (9 child searches plus their pages); the portal's own shortfall is not recoverable."""
+    import math
+    cap = round(v["total"] * ratio) if v.get("cap_hit") else (v.get("returned") or 0)
+    pages = max(0, math.ceil((v.get("returned") or 0) / 20) - 1)
+    req = cap + 1 + pages + ((9 + math.ceil(v["total"] / 20)) if v.get("cap_hit") else 0) if cap else 1
+    return cap, req
+
+
+def decide_scope(permit_budget: int) -> dict:
+    """Pick the highest-permit blocks of the current scope up to ``permit_budget`` capturable permits; record every block."""
     counts = json.loads((ROOT / "block_counts.json").read_text())
     scope = json.loads(SCOPE_JSON.read_text())
-    ranked = sorted(scope, key=lambda b: (-(counts.get(b["block_key"], {}).get("returned") or 0), b["nearest_miles"], b["block_key"]))
-    cum, rows = 0, []
+    noncap = [v for v in counts.values() if not v.get("cap_hit")]
+    ratio = 1 - sum(v["short_by"] for v in noncap) / max(1, sum(v["total"] for v in noncap))
+    est = {b["block_key"]: _estimate(counts[b["block_key"]], ratio) if b["block_key"] in counts else (0, 0) for b in scope}
+    ranked = sorted(scope, key=lambda b: (-est[b["block_key"]][0], b["nearest_miles"], b["block_key"]))
+    cum = cum_req = 0
+    rows = []
     for rank, b in enumerate(ranked, 1):
         c = counts.get(b["block_key"])
-        ret = (c or {}).get("returned") or 0
-        tot = (c or {}).get("total") or 0
-        include = bool(c) and ret >= min_total and cum + ret <= permit_budget
+        cap, req = est[b["block_key"]]
+        include = bool(c) and cap > 0 and cum + cap <= permit_budget
         if include:
-            cum += ret
+            cum += cap; cum_req += req
         rows.append({"block_key": b["block_key"], "section": b["section"], "block": b["block"], "parcels": b["parcels"],
-                     "nearest_miles": b["nearest_miles"], "counted_total": tot, "counted_returned": ret,
-                     "short_by": (c or {}).get("short_by"), "cap_hit": (c or {}).get("cap_hit"), "rank": rank, "included": include,
-                     "cumulative_included_permits": cum,
-                     "reason": ("not counted" if not c else "included: within permit budget" if include
-                                else "excluded: no permits" if ret < min_total else "excluded: over permit budget")})
-    return {"rows": rows, "included": [r for r in rows if r["included"]], "budget": permit_budget, "included_permits": cum}
+                     "nearest_miles": b["nearest_miles"], "counted_total": (c or {}).get("total", 0), "counted_returned": (c or {}).get("returned", 0),
+                     "short_by": (c or {}).get("short_by"), "cap_hit": (c or {}).get("cap_hit"), "capturable": cap, "est_requests": req,
+                     "rank": rank, "included": include, "cumulative_included_permits": cum,
+                     "reason": ("not counted" if not c else "excluded: no permits" if cap == 0 else
+                                "included: highest-permit blocks within the permit budget" if include else "excluded: over permit budget")})
+    all_cap = sum(r["capturable"] for r in rows); all_req = sum(r["est_requests"] for r in rows)
+    return {"rows": rows, "included": [r for r in rows if r["included"]], "budget": permit_budget, "included_permits": cum, "included_requests": cum_req,
+            "all_capturable": all_cap, "all_requests": all_req, "recovery_ratio": ratio}
 
 
 def main(argv=None) -> int:
@@ -199,19 +214,22 @@ def main(argv=None) -> int:
             run_id = "etrakit-scope-decision-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             con.execute("DROP TABLE IF EXISTS etrakit_scope_decision")
             con.execute("""CREATE TABLE etrakit_scope_decision (block_key VARCHAR, section VARCHAR, block VARCHAR, parcels INTEGER, nearest_miles DOUBLE,
-                counted_total INTEGER, counted_returned INTEGER, short_by INTEGER, cap_hit BOOLEAN, rank INTEGER, included BOOLEAN,
-                cumulative_included_permits INTEGER, reason VARCHAR, decided_run VARCHAR, decided_at TIMESTAMPTZ DEFAULT now())""")
+                counted_total INTEGER, counted_returned INTEGER, short_by INTEGER, cap_hit BOOLEAN, capturable INTEGER, est_requests INTEGER,
+                rank INTEGER, included BOOLEAN, cumulative_included_permits INTEGER, reason VARCHAR, decided_run VARCHAR, decided_at TIMESTAMPTZ DEFAULT now())""")
             for r in res["rows"]:
                 con.execute("INSERT INTO etrakit_scope_decision (block_key, section, block, parcels, nearest_miles, counted_total, counted_returned, short_by, "
-                            "cap_hit, rank, included, cumulative_included_permits, reason, decided_run) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            "cap_hit, capturable, est_requests, rank, included, cumulative_included_permits, reason, decided_run) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                             [r["block_key"], r["section"], r["block"], r["parcels"], r["nearest_miles"], r["counted_total"], r["counted_returned"], r["short_by"],
-                             r["cap_hit"], r["rank"], r["included"], r["cumulative_included_permits"], r["reason"], run_id])
+                             r["cap_hit"], r["capturable"], r["est_requests"], r["rank"], r["included"], r["cumulative_included_permits"], r["reason"], run_id])
             con.execute("CHECKPOINT")
         inc = sorted(res["included"], key=lambda r: (r["nearest_miles"], r["block_key"]))
         write_json(ROOT / "harvest_blocks.json", [{"block_key": r["block_key"], "section": r["section"], "block": r["block"], "parcels": r["parcels"],
                                                     "nearest_miles": r["nearest_miles"], "expected_total": r["counted_total"]} for r in inc])
+        write_json(ROOT / "scope_decision_summary.json", {k: v for k, v in res.items() if k != "rows"} | {"decided_run": run_id})
         print(json.dumps({"included_blocks": len(res["included"]), "excluded_blocks": len(res["rows"]) - len(res["included"]),
-                          "included_permits": res["included_permits"], "budget": res["budget"]}))
+                          "included_capturable_permits": res["included_permits"], "included_est_requests": res["included_requests"],
+                          "all_capturable": res["all_capturable"], "all_est_requests": res["all_requests"], "budget": res["budget"],
+                          "hours_at_1.1_1.3_1.5_s_per_request": [round(res["included_requests"] * t / 3600, 2) for t in (1.1, 1.3, 1.5)]}))
         return 0
     batch = args.batch_id or "etrakit-batch-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     load_batch(batch, date.fromisoformat(args.as_of), args.roof_age_threshold)

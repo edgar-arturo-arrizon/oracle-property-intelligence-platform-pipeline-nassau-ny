@@ -139,7 +139,7 @@ class Harvester:
         # truncated result ("returned N of M"): split the lot-number prefix until every record is reachable
         if q["cap_hit"]:
             digits = len(value.rsplit("-", 1)[1]) if not value.endswith("-") else 0
-            if digits >= MAX_LOT_PREFIX_DIGITS:
+            if oper == "EQUALS" or digits >= MAX_LOT_PREFIX_DIGITS:   # a single lot with >= 100 permits cannot be split by prefix
                 q["unresolved"] = True
                 self.log(f"  UNRESOLVED truncated query {value!r}: {q['returned']} of {q['total']}")
                 return

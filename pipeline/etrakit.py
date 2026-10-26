@@ -97,11 +97,13 @@ class EtrakitClient:
         if page.locator("iframe[src*='recaptcha'], iframe[title*='reCAPTCHA' i], iframe[src*='challenges.cloudflare']").count():
             raise PortalBlocked(f"captcha/challenge iframe at {where}")
 
-    def _act(self, label: str, fn, retries: int = 3):
-        """Run one portal action with pacing, a block guard, and exponential backoff."""
+    def _act(self, label: str, fn, retries: int = 3, pace: bool = True):
+        """Run one portal action with a block guard and exponential backoff. ``pace`` spaces actions that send a
+        request to the portal (>= 1 s apart); purely local steps (fill a box, wait for the DOM) are not paced."""
         last = None
         for attempt in range(retries + 1):
-            self.pacer.wait()
+            if pace:
+                self.pacer.wait()
             try:
                 out = fn()
                 self.guard(label)
@@ -122,8 +124,8 @@ class EtrakitClient:
         self.phase = "login"
         page = self.page
         self._act("login page", lambda: page.goto(LOGIN_URL, wait_until="domcontentloaded"))
-        self._act("fill user", lambda: page.fill("#cplMain_txtPublicUserName", self.creds.username))
-        self._act("fill password", lambda: page.fill("#cplMain_txtPublicPassword", self.creds.password))
+        self._act("fill user", lambda: page.fill("#cplMain_txtPublicUserName", self.creds.username), pace=False)
+        self._act("fill password", lambda: page.fill("#cplMain_txtPublicPassword", self.creds.password), pace=False)
         self._act("submit login", lambda: (page.click("#cplMain_btnPublicLogin"), page.wait_for_load_state("domcontentloaded")))
         time.sleep(1.5)
         body = page.inner_text("body")
@@ -178,7 +180,7 @@ class EtrakitClient:
                 if prev_sig is None:
                     raise
                 # identical results to the previous query (e.g. a repeated search): accept the current grid
-        self._act("wait for results", run)
+        self._act("wait for results", run, pace=False)
 
     def grid_snapshot(self) -> tuple[str, dict]:
         """Raw grid HTML (scrubbed) plus parsed rows/counts; the count message is read before any row click."""
@@ -198,9 +200,9 @@ class EtrakitClient:
             self._post(lambda: page.select_option("#cplMain_ddSearchBy", field), "set search-by")
             self._field, self._oper = field, None
         if self._oper != oper:
-            self._act("set operator", lambda: page.select_option("#cplMain_ddSearchOper", oper))
+            self._act("set operator", lambda: page.select_option("#cplMain_ddSearchOper", oper), pace=False)
             self._oper = oper
-        self._act("fill value", lambda: page.fill("#cplMain_txtSearchString", value))
+        self._act("fill value", lambda: page.fill("#cplMain_txtSearchString", value), pace=False)
         prev = self._grid_sig()
         self._post(lambda: page.click("#ctl00_cplMain_btnSearch"), f"search {value}")
         self._wait_results(prev_sig=prev)
