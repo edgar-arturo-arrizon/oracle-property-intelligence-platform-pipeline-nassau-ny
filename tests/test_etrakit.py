@@ -60,6 +60,10 @@ class ClassifyTests(unittest.TestCase):
         r = C.classify_roofing({"contacts": [{"contact_type": "OWNER", "name": "ROOFING HOLDINGS LLC"}]})
         self.assertFalse(r["is_roofing"]); self.assertEqual(r["confidence"], "none")
 
+    def test_exterior_fee_code_is_low_only(self):
+        r = C.classify_roofing({"fees": [{"description": "B-REXT1"}]})
+        self.assertFalse(r["is_roofing"]); self.assertEqual(r["confidence"], "low"); self.assertIn("fee_code_exterior_work", r["basis_summary"])
+
     def test_plumbing_not_roofing(self):
         r = C.classify_roofing({"permit_type": "BUILDING", "contacts": [{"contact_type": "PLUMBER", "name": "ACME PLUMBING"}],
                                 "fees": [{"description": "B-WTR HTR"}], "inspections": [{"type": "P-FINAL"}]})

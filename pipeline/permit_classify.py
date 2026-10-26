@@ -21,6 +21,7 @@ NOT_REROOF_CONTEXT = re.compile(r"solar|photovolt|\bpv\b|antenna|dormer|addition
 ROLE_ROOFER = re.compile(r"roof", re.I)
 NAME_ROOF = re.compile(r"\broof(?:ing|er|ers)?\b|\bshingle", re.I)
 CODE_ROOF = re.compile(r"roof", re.I)          # fee codes and inspection types, e.g. "B-ROOF"
+CODE_EXTERIOR = re.compile(r"^B-[RC]EXT", re.I)  # residential/commercial *exterior* work fee codes: may include roofing or siding
 CONFIDENCE_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3}
 NONOWNER_ROLES = ("OWNER", "APPLICANT")
 
@@ -54,6 +55,10 @@ def classify_roofing(detail: dict) -> dict:
     for f in detail.get("fees") or []:
         if CODE_ROOF.search(f.get("description") or ""):
             bases.append({"basis": "fee_code_roof", "confidence": "medium", "evidence": f["description"]})
+    for f in detail.get("fees") or []:
+        if CODE_EXTERIOR.search(f.get("description") or ""):
+            bases.append({"basis": "fee_code_exterior_work", "confidence": "low", "evidence": f["description"]})
+            break
     for i in detail.get("inspections") or []:
         if CODE_ROOF.search(i.get("type") or ""):
             bases.append({"basis": "inspection_type_roof", "confidence": "medium", "evidence": i["type"]})

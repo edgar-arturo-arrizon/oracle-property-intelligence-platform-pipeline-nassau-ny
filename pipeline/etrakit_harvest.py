@@ -189,6 +189,9 @@ class Harvester:
         q["new_permits"] += 1
         self.captured_this_run += 1
         self.totals["permits"] += 1
+        if self.captured_this_run % 50 == 0:   # heartbeat: big blocks otherwise run silent for many minutes
+            self.log(f"  progress: {st['block_key']} {len(st['permits'])} permits in block, {self.captured_this_run} this run, "
+                     f"portal requests={sum(self.client.requests.values())}")
         write_json(self.block_path(st["block_key"]), st)   # checkpoint after every permit
 
 
