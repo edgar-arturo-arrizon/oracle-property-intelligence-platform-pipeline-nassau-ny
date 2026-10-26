@@ -1,5 +1,16 @@
 # Oracle Property Intelligence Platform Pipeline - Nassau County, NY
 
+## Published artifacts (live on public IPFS)
+
+Latest run: `ipfs-20261026T152300Z`, manifest CID `bafkreibaghprubas2gbh6aieotgshggvdgywwmodzm3l5habdgyry565ae`.
+
+- Full manifest and gateway-verification results: `docs/ipfs/manifest-ipfs-20261026T152300Z.json`, `docs/ipfs/verification-ipfs-20261026T152300Z.json`
+- Human-readable summary, reproduce steps, and the gateway-independence write-up: `docs/ipfs-publish.md`
+- Verify any artifact yourself, e.g. the properties table the CRM consumes:
+  `https://gateway.pinata.cloud/ipfs/bafybeiblnvw522oyy2crcmkqixp44xtbh66toiggzm7myf6quydtmla5yu`
+- Consumed by the sibling [roofing-crm](https://github.com/prismteam-ai/roofing-crm) repo via `shared/data-cids.json` (kept in sync with this manifest).
+- Full run history, including the previous run's CIDs, in `docs/ipfs/history.json`.
+
 ## Context
 
 This repository is the **data gathering and ingestion pipeline** that supplies the [Roofing CRM & Lead Identification UI](https://github.com/prismteam-ai/roofing-crm). The CRM helps roofing companies explore properties in their service area, identify aging roofs and open roofing permits, and turn those signals into leads. This pipeline story covers collecting, loading, reconciling, and exposing the underlying property and permit datasets; the CRM UI/workflow itself is out of scope here.
