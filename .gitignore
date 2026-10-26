@@ -11,3 +11,6 @@ __pycache__/
 # Local secrets (portal credentials) never go to Git.
 .env
 .env.*
+
+# JS tooling installs
+node_modules/
