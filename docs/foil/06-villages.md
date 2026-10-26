@@ -20,7 +20,7 @@ Villages are listed by parcel count (NYS centroid `MUNI_NAME`, 2025 roll). Porta
 | New Hyde Park | 3,190 | iWorQ, reCAPTCHA-gated | https://vnhp.org/ |
 | Great Neck | 3,028 | none found | https://www.greatneckvillage.org/ |
 
-The other 51 villages (each under ~3,000 parcels) use the same letter. Their portal status is `needs-review` in `../nassau-sources.yaml`, except Village of Hewlett Harbor (captcha-gated iWorQ portal, status `blocked`) and Village of North Hills (OpenGov tenant, status `blocked`) — both have an identified portal, so send the records request to the portal/Village Clerk route in `../nassau-sources.yaml` for those two rather than the generic FOIL letter.
+The other 51 villages (each under ~3,000 parcels) use the same letter; their portal status is `needs-review` in `../nassau-sources.yaml`. Village of Hewlett Harbor (captcha-gated iWorQ portal) and Village of North Hills (OpenGov tenant, anonymous listing forbidden) are `blocked`: each has an identified portal, but neither allows a public records search through it, so send the same FOIL letter for these two as well, addressed to that village's Clerk/Records Access Officer per `records_request.recipient_office` in `../nassau-sources.yaml` -- do not rely on the blocked portal.
 
 ---
 
