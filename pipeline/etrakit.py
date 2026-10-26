@@ -36,6 +36,13 @@ class HarvestError(RuntimeError):
     """Transient failures exhausted their retries for one action."""
 
 
+class DetailStateLost(HarvestError):
+    """The results grid is gone (session bounced to login, or the page reloaded): the caller must re-run its search."""
+
+
+DETAIL_ATTEMPTS = 3
+
+
 class EtrakitClient:
     def __init__(self, creds: Credentials | None = None, headless: bool = True, max_logins: int = 3):
         self.creds = creds or Credentials()
@@ -97,6 +104,14 @@ class EtrakitClient:
         if page.locator("iframe[src*='recaptcha'], iframe[title*='reCAPTCHA' i], iframe[src*='challenges.cloudflare']").count():
             raise PortalBlocked(f"captcha/challenge iframe at {where}")
 
+    def _guard_quietly(self, where: str) -> None:
+        """guard() after a failed action: a portal block still stops the run, but a timeout while reading the page
+        to look for a block must not replace the original error (it would escape every retry loop)."""
+        try:
+            self.guard(where)
+        except (PWTimeout, PWError):
+            pass
+
     def _act(self, label: str, fn, retries: int = 3, pace: bool = True):
         """Run one portal action with a block guard and exponential backoff. ``pace`` spaces actions that send a
         request to the portal (>= 1 s apart); purely local steps (fill a box, wait for the DOM) are not paced."""
@@ -112,7 +127,7 @@ class EtrakitClient:
                 raise
             except (PWTimeout, PWError) as exc:
                 last = exc
-                self.guard(label + " (after error)")
+                self._guard_quietly(label + " (after error)")
                 time.sleep(2.0 * (2 ** attempt))
         raise HarvestError(f"{label}: {self.creds.scrub(str(last))[:200]}")
 
@@ -142,6 +157,10 @@ class EtrakitClient:
     def _ensure_session(self) -> None:
         if "login.aspx" in self.page.url.lower():
             self.login()
+            self._field = self._oper = None     # a fresh page has the default search-by / operator selected
+        elif not self.page.locator("#cplMain_ddSearchBy").count():   # wandered off the search page: go back to it
+            self._act("reopen permit search", lambda: self.page.goto(SEARCH_URL, wait_until="domcontentloaded"))
+            self._field = self._oper = None
 
     # ---------------------------------------------------------------- search
     def _post(self, trigger, label: str, timeout: int = 90000, settle: bool = True):
@@ -234,7 +253,32 @@ class EtrakitClient:
 
     # ---------------------------------------------------------------- detail
     def open_detail(self, row_index: int, permit_no: str | None = None) -> str:
-        """Click a grid row; returns the scrubbed detail-panel HTML (all tabs arrive in one response)."""
+        """Click a grid row; returns the scrubbed detail-panel HTML (all tabs arrive in one response).
+
+        Every Playwright call in the detail path can time out (the panel never renders after a slow or dropped
+        postback). Each attempt re-clicks the row (a fresh postback, no page reload, so the grid and its page index
+        survive); after DETAIL_ATTEMPTS the permit is reported as a HarvestError and the caller logs it and moves on.
+        If the grid itself is gone, DetailStateLost tells the caller to re-run its search first."""
+        last: Exception | None = None
+        for attempt in range(DETAIL_ATTEMPTS):
+            try:
+                return self._open_detail_once(row_index, permit_no)
+            except (PWTimeout, PWError) as exc:
+                last = exc
+                self._guard_quietly(f"detail row {row_index} (attempt {attempt + 1})")   # PortalBlocked still propagates
+                if self._grid_lost():
+                    raise DetailStateLost(f"results grid lost while opening row {row_index}") from exc
+                time.sleep(2.0 * (2 ** attempt))
+        raise HarvestError(f"detail panel for row {row_index} ({permit_no}) not available after {DETAIL_ATTEMPTS} attempts: "
+                           f"{self.creds.scrub(str(last))[:160]}")
+
+    def _grid_lost(self) -> bool:
+        try:
+            return "login.aspx" in self.page.url.lower() or self.page.locator(GRID).count() == 0
+        except (PWTimeout, PWError):
+            return True
+
+    def _open_detail_once(self, row_index: int, permit_no: str | None) -> str:
         self.phase = "detail"
         page = self.page
         # no networkidle here: the targeted waits below (panel is for this permit, tabs/rows rendered) are the settle signal
@@ -244,7 +288,7 @@ class EtrakitClient:
                 page.wait_for_function("(no) => { const a = document.querySelector(\"[id$='hlSiteAddress']\"); "
                                        "return !!a && (a.getAttribute('onclick') || '').includes('ActivityNo=' + no); }",
                                        arg=permit_no, timeout=8000)
-            except PWTimeout:
+            except (PWTimeout, PWError):
                 pass  # verification in the harvester records a mismatch if the panel is stale
         # tabs and grids render client-side shortly after the postback: wait until each tab's
         # "(N)" count equals the number of rows actually rendered (best effort; parser flags a gap)
@@ -256,7 +300,8 @@ class EtrakitClient:
                 const want = (re) => { const l = labs.find(x => re.test(x)); const m = l && l.match(/\\((\\d+)\\)/); return m ? parseInt(m[1], 10) : 0; };
                 const have = (frag) => root.querySelectorAll(`tr[id*='${frag}_ctl00__']`).length;
                 return have('rgContactInfo') >= want(/^Contacts/) && have('rgInspectionInfo') >= want(/^Inspections/); }""", timeout=20000)
-        except PWTimeout:
+        except (PWTimeout, PWError):
             pass
-        html = page.inner_html("#divSearchDetails")   # tab strip + every pane (Permit/Site/Contacts/Fees/Inspections/Conditions)
+        # the one read that used to be unprotected: a short timeout so a missing panel fails fast and is retried
+        html = page.inner_html("#divSearchDetails", timeout=20000)   # tab strip + every pane (Permit/Site/Contacts/Fees/Inspections/Conditions)
         return self.creds.scrub(html)

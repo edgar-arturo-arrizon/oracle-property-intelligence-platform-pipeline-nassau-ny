@@ -25,7 +25,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import config, etrakit_parse as P
-from .etrakit import FIELD_SBL, SEARCH_URL, EtrakitClient, HarvestError
+from playwright.sync_api import Error as PWError
+from playwright.sync_api import TimeoutError as PWTimeout
+
+from .etrakit import FIELD_SBL, SEARCH_URL, DetailStateLost, EtrakitClient, HarvestError
 from .etrakit_session import LoginFailed, PortalBlocked
 from .fetch import ArtifactStore, utcnow
 
@@ -152,6 +155,13 @@ class Harvester:
             for c_oper, c_val in children:
                 self._run_query(st, c_val, c_oper, depth + 1)
 
+    def _recover_grid(self, oper: str, value: str, page_no: int) -> None:
+        """Re-run the current query and return to the page being walked (row indexes stay valid on that page)."""
+        self.log(f"  results grid lost; re-running {value!r} and returning to page {page_no}")
+        self.client.search(FIELD_SBL, oper, value)
+        for _ in range(page_no - 1):
+            self.client.next_page()
+
     def _capture(self, st: dict, q: dict, row: dict, value: str, oper: str, page_no: int) -> None:
         if self.stop:
             raise _Stopped()
@@ -164,12 +174,15 @@ class Harvester:
                 html = self.client.open_detail(row["row_index"], row["permit_no"])
                 d = P.parse_detail(html)
         except HarvestError as exc:
+            # one permit failed after its retries: record it (a later run retries it, since it has no saved detail) and move on
             st["failures"].append({"permit_no": row["permit_no"], "stage": "detail", "error": str(exc)[:200], "at": now_iso()})
             self.totals["failures"] += 1
+            if isinstance(exc, DetailStateLost):
+                self._recover_grid(oper, value, page_no)   # without the grid, every following row click would fail too
             return
         fetched_at = utcnow()
         url = f"{SEARCH_URL}#search={FIELD_SBL}|{oper}|{value}|page={page_no}|permit={row['permit_no']}"
-        art = self.store.put(f"{slug(st['block_key'])}__{row['permit_no']}.detail", url, html.encode(), fetched_at)
+        art = self.store.put(f"{slug(st['block_key'])}__{slug(row['permit_no'])}.detail", url, html.encode(), fetched_at)
         problems = []
         if d["incomplete"]:
             problems.append(f"detail incomplete after re-open: tab counts {d['tab_counts']} vs contacts={len(d['contacts'])} inspections={len(d['inspections'])}")
@@ -404,6 +417,11 @@ def run_batch(blocks: list[dict], run_id: str, budget: int | None, log) -> int:
     except HarvestError as exc:
         log(f"STOP (action failed after retries): {exc}")
         write_json(STATUS_JSON, {"state": "failed", "run_id": run_id, "reason": str(exc), "updated_at": now_iso()})
+        return 4
+    except (PWTimeout, PWError) as exc:   # a Playwright call outside the per-action retries: transient, so restart the session
+        log(f"STOP (unhandled Playwright error, restarting session): {type(exc).__name__}: {str(exc)[:200]}")
+        _load_into_db(run_id, batches + 1, log)
+        write_json(STATUS_JSON, {"state": "failed", "run_id": run_id, "reason": f"{type(exc).__name__}: {str(exc)[:200]}", "updated_at": now_iso()})
         return 4
     finally:
         if PID_FILE.exists() and PID_FILE.read_text().strip() == str(os.getpid()):
