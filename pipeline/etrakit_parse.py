@@ -71,7 +71,8 @@ def parse_grid(html: str) -> dict:
 def parse_detail(html: str) -> dict:
     """Detail panel: Permit Info, Site Info, Contacts, Fees, Inspections, Conditions."""
     site_link = re.search(r'id="[^"]*hlSiteAddress"[^>]*onclick="[^"]*ActivityNo=([^&\'"]+)', html)
-    parid = re.search(r'PARID:</span>.*?<a[^>]*>([^<]*)</a>', html, re.S)
+    # the value sits in the very next column div; a permit with no PARID has an empty column (never scan ahead)
+    parid = re.search(r'PARID:</span>\s*</div>\s*<div class="column">(.*?)</div>', html, re.S)
     tabs = {text(m.group(1)).split(" (")[0].split(" $")[0]: text(m.group(1)) for m in re.finditer(r'<span class="rtsTxt">(.*?)</span>', html, re.S)}
     out = {
         "permit_no_in_panel": _html.unescape(site_link.group(1)) if site_link else None,

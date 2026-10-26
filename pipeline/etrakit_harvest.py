@@ -13,6 +13,7 @@ blocks marked ``complete`` are not revisited. The harvester never opens the Duck
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import os
 import random
@@ -174,7 +175,7 @@ class Harvester:
             problems.append(f"detail incomplete after re-open: tab counts {d['tab_counts']} vs contacts={len(d['contacts'])} inspections={len(d['inspections'])}")
         if d["permit_no_in_panel"] and d["permit_no_in_panel"] != row["permit_no"]:
             problems.append(f"detail panel is for {d['permit_no_in_panel']}, clicked {row['permit_no']}")
-        if d["site_parid"] and row["sbl"] and d["site_parid"].strip() != row["sbl"].strip():
+        if d["site_parid"] and row["sbl"] and d["site_parid"].strip() != row["sbl"].strip():   # an empty PARID is data, not a mismatch
             problems.append(f"site PARID {d['site_parid']!r} differs from grid SBL {row['sbl']!r}")
         if problems:
             st["failures"].append({"permit_no": row["permit_no"], "stage": "verify", "error": "; ".join(problems), "at": now_iso()})
@@ -455,6 +456,38 @@ def cmd_stop(args) -> int:
     return 0
 
 
+def cmd_reparse(args) -> int:
+    """Offline: re-run the detail parser over the saved raw HTML of every captured permit and rebuild verify problems."""
+    changed = 0
+    for bf in sorted(BLOCK_DIR.glob("*.json")):
+        st = json.loads(bf.read_text())
+        dirty = False
+        for no, p in st["permits"].items():
+            html = gzip.open(p["raw"]["path"]).read().decode()
+            d = P.parse_detail(html)
+            problems = []
+            if d["incomplete"]:
+                problems.append(f"detail incomplete: tab counts {d['tab_counts']} vs contacts={len(d['contacts'])} inspections={len(d['inspections'])}")
+            if d["permit_no_in_panel"] and d["permit_no_in_panel"] != no:
+                problems.append(f"detail panel is for {d['permit_no_in_panel']}, clicked {no}")
+            if d["site_parid"] and p["grid_sbl"] and d["site_parid"].strip() != p["grid_sbl"].strip():
+                problems.append(f"site PARID {d['site_parid']!r} differs from grid SBL {p['grid_sbl']!r}")
+            if d != p["detail"] or problems != p["verify_problems"]:
+                p["detail"], p["verify_problems"] = d, problems
+                dirty = True
+        if dirty:
+            keep = [f for f in st["failures"] if f.get("stage") != "verify"]
+            keep += [{"permit_no": no, "stage": "verify", "error": "; ".join(p["verify_problems"]), "at": now_iso()}
+                     for no, p in st["permits"].items() if p["verify_problems"]]
+            st["failures"] = keep
+            if st["status"] == "incomplete" and not keep and not [q for q in st["queries"] if q.get("unresolved")]:
+                st["status"] = "complete"
+            write_json(bf, st)
+            changed += 1
+    print(f"reparse: {changed} block files updated")
+    return 0
+
+
 def cmd_status(args) -> int:
     alive = False
     if PID_FILE.exists():
@@ -480,7 +513,7 @@ def main(argv=None) -> int:
     s = sub.add_parser("sample"); s.add_argument("--blocks", type=int, default=16); s.add_argument("--seed", type=int, default=7); s.add_argument("--probe-split", default=None)
     p = sub.add_parser("pilot"); p.add_argument("--permits", type=int, default=25); p.add_argument("--block", default=None)
     h = sub.add_parser("harvest"); h.add_argument("--limit-blocks", type=int, default=None)
-    sub.add_parser("start"); sub.add_parser("stop"); sub.add_parser("status")
+    sub.add_parser("start"); sub.add_parser("stop"); sub.add_parser("status"); sub.add_parser("reparse")
     args = ap.parse_args(argv)
     log = log_to(None)
     if args.cmd == "scope-export":
@@ -495,6 +528,8 @@ def main(argv=None) -> int:
         return cmd_stop(args)
     if args.cmd == "status":
         return cmd_status(args)
+    if args.cmd == "reparse":
+        return cmd_reparse(args)
     scope = load_scope()
     if args.cmd == "pilot":
         blocks = [b for b in scope if b["block_key"] == args.block] if args.block else scope[:1]

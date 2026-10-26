@@ -14,7 +14,7 @@ DETAIL_HTML = """
 <span id="cplMain_ctl07_lblPermitAppliedDate">3/16/2015</span><span id="cplMain_ctl07_lblPermitIssuedDate">3/20/2015</span>
 <span id="cplMain_ctl07_lblPermitFinaledDate"></span><span id="cplMain_ctl07_lblPermitExpirationDate">3/20/2016</span>
 <a id="cplMain_ctl08_hlSiteAddress" onclick="Javascript:openBingMap('../MS_vMap.aspx?Group=permit&amp;ActivityNo=X123', 685,520);">1 TEST ST&nbsp;</a>
-<span id="cplMain_ctl08_lblPermitNoLbl">PARID:</span></div><div><a href="x">99-1-5</a>
+<div class="column"><span id="x_lblParcelNumberLbl">PARID:</span> </div> <div class="column"> <a href="x">99-1-5</a> </div>
 <tr class="rgRow" id="ctl00_cplMain_ctl09_rgContactInfo_ctl00__0"><td>OWNER</td><td>TEST OWNER</td><td>()-</td><td>&nbsp;</td><td>1 TEST ST</td><td>X, NY</td></tr>
 <tr class="rgRow" id="ctl00_cplMain_ctl09_rgContactInfo_ctl00__1"><td>ROOFER</td><td>ACME ROOFING INC</td><td>()-</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
 <tr class="rgRow" id="ctl00_cplMain_ctl13_rgInspectionInfo_ctl00__0"><td>B-FINAL</td><td>COMPLETED</td><td><span>4/13/2017</span></td><td>&nbsp;</td><td>4/13/2017</td><td>&nbsp;</td></tr>
@@ -30,6 +30,11 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(len(d["contacts"]), 2)
         self.assertEqual(d["tab_counts"], {"contacts": 2, "inspections": 1, "conditions": 0})
         self.assertFalse(d["incomplete"])
+
+    def test_missing_parid_does_not_scan_ahead(self):
+        html = ('<div class="column"><span id="x_lblParcelNumberLbl">PARID:</span></div><div class="column"></div>'
+                '<a href="y">Contact Type</a>')
+        self.assertEqual(P.parse_detail(html)["site_parid"], "")
 
     def test_incomplete_detected(self):
         d = P.parse_detail(DETAIL_HTML.replace('rgContactInfo_ctl00__1', 'x'))
