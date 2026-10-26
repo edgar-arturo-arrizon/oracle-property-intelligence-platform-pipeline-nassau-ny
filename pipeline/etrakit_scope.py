@@ -24,11 +24,12 @@ from datetime import datetime, timezone
 from . import config, db
 
 CENTER = (40.7684, -73.5251)  # Hicksville
-RADIUS_MI = 3.0
+RADIUS_MI = 1.0   # operator decision 2026-10-25: 3 mi estimated 62k-87k permits (50-75 h), too long
 SWIS = "282489"
 
 
-def build(con, run_id: str) -> dict:
+def build(con, run_id: str, radius: float = RADIUS_MI) -> dict:
+    RADIUS = radius
     lat0, lon0 = CENTER
     con.execute(f"""
     CREATE OR REPLACE TABLE etrakit_scope_parcels AS
@@ -41,12 +42,12 @@ def build(con, run_id: str) -> dict:
       SELECT *, 3958.8 * 2 * asin(sqrt(pow(sin(radians(lat - {lat0}) / 2), 2) +
              cos(radians({lat0})) * cos(radians(lat)) * pow(sin(radians(lon - ({lon0})) / 2), 2))) AS miles_from_hicksville
       FROM p WHERE lat IS NOT NULL),
-    blocks AS (SELECT DISTINCT k.sec AS sec, k.blk AS blk FROM d WHERE miles_from_hicksville <= {RADIUS_MI})
+    blocks AS (SELECT DISTINCT k.sec AS sec, k.blk AS blk FROM d WHERE miles_from_hicksville <= {RADIUS})
     SELECT p.property_key, p.print_key_code, p.sbl_key, p.property_class, p.situs_address,
            p.k.sec AS section, p.k.blk AS block, p.k.lot AS lot, p.k.rest AS lot_suffix,
            p.k.sec || '-' || p.k.blk || '-' AS block_search_key,
            p.k.sec || '-' || p.k.blk || '-' || p.k.lot AS etrakit_sbl_guess,
-           d.miles_from_hicksville, (d.miles_from_hicksville <= {RADIUS_MI}) AS in_radius,
+           d.miles_from_hicksville, (d.miles_from_hicksville <= {RADIUS}) AS in_radius,
            '{run_id}' AS derived_run
     FROM p JOIN blocks b ON b.sec = p.k.sec AND b.blk = p.k.blk
     LEFT JOIN d USING (property_key)""")
@@ -59,7 +60,7 @@ def build(con, run_id: str) -> dict:
                          count(DISTINCT section), count(*) FILTER (WHERE miles_from_hicksville IS NULL)
                          FROM etrakit_scope_parcels""").fetchone()
     return {"parcels": out[0], "parcels_in_radius": out[1], "blocks": out[2], "sections": out[3], "unplaced_parcels_in_blocks": out[4],
-            "center": CENTER, "radius_miles": RADIUS_MI, "swis": SWIS}
+            "center": CENTER, "radius_miles": radius, "swis": SWIS}
 
 
 def record_run(con, run_id: str, mode: str, status: str, deltas: dict, limitations: list[str]) -> None:
@@ -78,13 +79,21 @@ def db_git() -> str:
         return "unknown"
 
 
-def main() -> int:
+def main(argv=None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--radius", type=float, default=RADIUS_MI)
+    ap.add_argument("--archive-previous-as", default=None, help="copy the current scope tables to *_<suffix> first, e.g. r3")
+    args = ap.parse_args(argv)
     run_id = "etrakit-scope-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     with db.single_writer():
         con = db.connect()
-        stats = build(con, run_id)
+        if args.archive_previous_as and db.table_exists(con, "etrakit_scope_blocks"):
+            for t in ("etrakit_scope_parcels", "etrakit_scope_blocks"):
+                con.execute(f"CREATE OR REPLACE TABLE {t}_{args.archive_previous_as} AS SELECT * FROM {t}")
+        stats = build(con, run_id, args.radius)
         record_run(con, run_id, "etrakit-scope", "succeeded", {"scope": stats}, [
-            "Scope is whole section-blocks containing at least one parcel within 3 miles of Hicksville (SWIS 282489 only).",
+            f"Scope is whole section-blocks containing at least one parcel within {args.radius} miles of Hicksville (SWIS 282489 only).",
             "eTRAKiT SBL formatting (lot padding, '.A' and '/n' suffixes) is unverified until a logged-in probe.",
         ])
         con.execute("CHECKPOINT")

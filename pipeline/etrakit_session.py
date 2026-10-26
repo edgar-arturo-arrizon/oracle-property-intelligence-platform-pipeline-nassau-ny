@@ -18,7 +18,7 @@ from pathlib import Path
 from . import config
 
 BASE = "https://oys-trk.aspgov.com/eTRAKiT/"
-MIN_INTERVAL = 1.1  # seconds between portal actions (about 1 request per second)
+MIN_INTERVAL = 1.0  # seconds between portal actions (about 1 request per second)
 
 BLOCK_RX = re.compile(
     r"captcha|recaptcha|turnstile|challenge-platform|just a moment|access denied|"

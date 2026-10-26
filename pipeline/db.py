@@ -73,8 +73,11 @@ def table_exists(con, name: str) -> bool:
 
 
 def merge(con, run_id: str, table: str, stage_sql: str, key_expr: str, hash_cols: list[str],
-          scope_col: str | None = None, scope_val=None) -> dict:
-    """Merge a staged snapshot into ``table``. Returns counts of new/changed/unchanged/removed."""
+          scope_col: str | None = None, scope_val=None, tombstone: bool = True) -> dict:
+    """Merge a staged snapshot into ``table``. Returns counts of new/changed/unchanged/removed.
+
+    ``tombstone=False`` is for partial batches (e.g. a permit harvest that covers some blocks per run): rows absent
+    from the batch are left untouched instead of being tombstoned."""
     hash_expr = "md5(concat_ws('||', " + ", ".join(f"coalesce(CAST({c} AS VARCHAR), '<NULL>')" for c in hash_cols) + "))"
     con.execute(f"""
         CREATE OR REPLACE TEMP TABLE _stg AS
@@ -111,9 +114,10 @@ def merge(con, run_id: str, table: str, stage_sql: str, key_expr: str, hash_cols
             WHERE c.old_hash IS NULL OR c.old_hash <> c.new_hash OR NOT c.old_active""")
         con.execute(f"""UPDATE {table} SET last_seen_run='{run_id}' WHERE {scope_pred} AND record_key IN
                         (SELECT record_key FROM _cmp WHERE old_hash = new_hash AND old_active)""")
+        gone_pred = f"{scope_pred} AND is_active AND record_key NOT IN (SELECT record_key FROM _stg)" if tombstone else "FALSE"
         con.execute(f"""
             CREATE OR REPLACE TEMP TABLE _gone AS SELECT record_key, record_hash FROM {table}
-            WHERE {scope_pred} AND is_active AND record_key NOT IN (SELECT record_key FROM _stg)""")
+            WHERE {gone_pred}""")
         removed = con.execute("SELECT count(*) FROM _gone").fetchone()[0]
         con.execute(f"""INSERT INTO tombstones (run_id, table_name, scope, record_key, reason, last_record_hash)
                         SELECT '{run_id}', '{table}', '{scope_txt}', record_key, 'absent-from-source-snapshot', record_hash FROM _gone""")
